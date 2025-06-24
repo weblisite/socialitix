@@ -10,6 +10,7 @@ import {
   ClockIcon
 } from '@heroicons/react/24/outline';
 import WaveSurfer from 'wavesurfer.js';
+import { supabase } from '../lib/supabase';
 
 interface EngagementSegment {
   start: number;
@@ -40,7 +41,39 @@ interface VideoData {
   hooks?: Hook[];
 }
 
-export function VideoEditor() {
+interface Video {
+  id: string;
+  title: string;
+  url: string;
+  duration: number;
+}
+
+interface Clip {
+  id: string;
+  title: string;
+  status: string;
+  url?: string;
+  progress: number;
+  platform: string;
+  startTime: number;
+  endTime: number;
+  error?: string;
+}
+
+export default function VideoEditor() {
+  const [videos, setVideos] = useState<Video[]>([]);
+  const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
+  const [clips, setClips] = useState<Clip[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  // Clip generation form state
+  const [startTime, setStartTime] = useState(0);
+  const [endTime, setEndTime] = useState(15);
+  const [title, setTitle] = useState('');
+  const [platform, setPlatform] = useState('tiktok');
+  const [hook, setHook] = useState('');
+
   const [video, setVideo] = useState<VideoData | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -59,6 +92,177 @@ export function VideoEditor() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const waveformRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
+
+  useEffect(() => {
+    fetchVideos();
+  }, []);
+
+  const fetchVideos = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const response = await fetch('/api/videos', {
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setVideos(data.videos || []);
+      }
+    } catch (err) {
+      console.error('Error fetching videos:', err);
+    }
+  };
+
+  const fetchClips = async () => {
+    if (!selectedVideo) return;
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const response = await fetch(`/api/clips?videoId=${selectedVideo.id}`, {
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setClips(data.clips || []);
+      }
+    } catch (err) {
+      console.error('Error fetching clips:', err);
+    }
+  };
+
+  const generateClip = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedVideo) return;
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Not authenticated');
+
+      const response = await fetch('/api/clips/generate', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          videoId: selectedVideo.id,
+          startTime: startTime,
+          endTime: endTime,
+          title: title || `${selectedVideo.title} - ${platform} Clip`,
+          platform: platform,
+          hook: hook,
+          style: {
+            effect: 'zoomIn'
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to generate clip');
+      }
+
+      const result = await response.json();
+      console.log('Clip generation started:', result);
+      
+      // Add the new clip to the list
+      const newClip: Clip = {
+        id: result.clip.id,
+        title: result.clip.title,
+        status: result.clip.status,
+        progress: 0,
+        platform: result.clip.platform,
+        startTime: result.clip.startTime,
+        endTime: result.clip.endTime
+      };
+      
+      setClips(prevClips => [newClip, ...prevClips]);
+      
+      // Reset form
+      setTitle('');
+      setHook('');
+      setStartTime(0);
+      setEndTime(15);
+      
+      // Start polling for status updates
+      pollClipStatus(result.clip.id);
+      
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate clip');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pollClipStatus = async (clipId: string) => {
+    const maxAttempts = 30; // 5 minutes max
+    let attempts = 0;
+
+    const checkStatus = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) return;
+
+        const response = await fetch(`/api/clips/status?clipId=${clipId}`, {
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.ok) {
+          const clipStatus = await response.json();
+          
+          // Update clip in the list
+          setClips(prevClips => 
+            prevClips.map(clip => 
+              clip.id === clipId 
+                ? { 
+                    ...clip, 
+                    status: clipStatus.status,
+                    progress: clipStatus.progress || 0,
+                    url: clipStatus.url,
+                    error: clipStatus.error
+                  }
+                : clip
+            )
+          );
+
+          // Continue polling if still processing
+          if (clipStatus.status === 'rendering' || clipStatus.status === 'processing') {
+            attempts++;
+            if (attempts < maxAttempts) {
+              setTimeout(checkStatus, 10000); // Check every 10 seconds
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Error checking clip status:', err);
+      }
+    };
+
+    checkStatus();
+  };
+
+  useEffect(() => {
+    if (selectedVideo) {
+      fetchClips();
+    }
+  }, [selectedVideo]);
 
   // Mock video data - in real app, this would come from props or API
   useEffect(() => {
@@ -302,312 +506,208 @@ export function VideoEditor() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white">
-      <div className="container mx-auto px-6 py-8">
-        {/* Header */}
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">Video Editor</h1>
-          <p className="text-slate-400">Create viral clips with AI-powered suggestions</p>
+          <h1 className="text-3xl font-bold text-gray-900">Video Editor</h1>
+          <p className="text-gray-600 mt-2">
+            Create viral clips using AI-powered Shotstack video editing
+          </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-          {/* Main Editor */}
-          <div className="lg:col-span-3 space-y-6">
-            {/* Video Preview */}
-            <div className="bg-slate-800 rounded-xl p-6">
-              <div className="aspect-video bg-black rounded-lg mb-4 relative overflow-hidden">
-                <video
-                  ref={videoRef}
-                  src={video.url}
-                  className="w-full h-full object-contain"
-                  muted
-                />
-                
-                {/* Video Controls Overlay */}
-                <div className="absolute bottom-4 left-4 right-4 bg-black/50 rounded-lg p-3 flex items-center gap-4">
-                  <button
-                    onClick={togglePlayPause}
-                    className="flex items-center justify-center w-10 h-10 bg-purple-600 hover:bg-purple-700 rounded-full transition-colors"
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Video Selection */}
+          <div className="lg:col-span-1">
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold mb-4">Select Video</h2>
+              <div className="space-y-3">
+                {videos.map((video) => (
+                  <div
+                    key={video.id}
+                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                      selectedVideo?.id === video.id
+                        ? 'border-blue-500 bg-blue-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                    onClick={() => setSelectedVideo(video)}
                   >
-                    {isPlaying ? (
-                      <PauseIcon className="w-5 h-5" />
-                    ) : (
-                      <PlayIcon className="w-5 h-5 ml-0.5" />
-                    )}
-                  </button>
-                  
-                  <div className="flex-1 text-sm text-white">
-                    {formatTime(currentTime)} / {formatTime(video.duration)}
+                    <h3 className="font-medium text-gray-900">{video.title}</h3>
+                    <p className="text-sm text-gray-500">
+                      Duration: {Math.round(video.duration)}s
+                    </p>
                   </div>
-                </div>
+                ))}
               </div>
-
-              {/* Timeline */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold">Timeline</h3>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setShowAIPanel(!showAIPanel)}
-                      className={`px-3 py-1 rounded-lg text-sm transition-colors ${
-                        showAIPanel ? 'bg-purple-600 text-white' : 'bg-slate-700 text-slate-300'
-                      }`}
-                    >
-                      <SparklesIcon className="w-4 h-4 inline mr-1" />
-                      AI Insights
-                    </button>
-                  </div>
-                </div>
-
-                {/* Waveform */}
-                <div className="relative">
-                  <div ref={waveformRef} className="waveform-container"></div>
-                  
-                  {/* Clip Selection Overlay */}
-                  <div 
-                    className="absolute top-0 bottom-0 bg-purple-500/30 border-2 border-purple-500 pointer-events-none"
-                    style={{
-                      left: `${(clipStart / video.duration) * 100}%`,
-                      width: `${((clipEnd - clipStart) / video.duration) * 100}%`
-                    }}
-                  >
-                    <div className="absolute -top-6 left-0 bg-purple-600 text-white px-2 py-1 rounded text-xs">
-                      {formatTime(clipStart)}
-                    </div>
-                    <div className="absolute -top-6 right-0 bg-purple-600 text-white px-2 py-1 rounded text-xs">
-                      {formatTime(clipEnd)}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Timeline Controls */}
-                <div className="flex items-center gap-4">
-                  <button
-                    onClick={setClipStartTime}
-                    className="flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-sm transition-colors"
-                  >
-                    <ClockIcon className="w-4 h-4" />
-                    Set Start
-                  </button>
-                  
-                  <button
-                    onClick={setClipEndTime}
-                    className="flex items-center gap-2 px-3 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm transition-colors"
-                  >
-                    <ClockIcon className="w-4 h-4" />
-                    Set End
-                  </button>
-
-                  <div className="flex-1 text-center text-sm text-slate-400">
-                    Clip Duration: {formatTime(clipEnd - clipStart)}
-                  </div>
-
-                  <button
-                    onClick={() => seekTo(clipStart)}
-                    className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm transition-colors"
-                  >
-                    Preview Start
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Export Settings */}
-            <div className="bg-slate-800 rounded-xl p-6">
-              <h3 className="text-lg font-semibold mb-4">Export Settings</h3>
-              
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2">Aspect Ratio</label>
-                  <select
-                    value={exportSettings.aspectRatio}
-                    onChange={(e) => setExportSettings(prev => ({ 
-                      ...prev, 
-                      aspectRatio: e.target.value as '16:9' | '9:16' | '1:1' 
-                    }))}
-                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                  >
-                    <option value="9:16">9:16 (TikTok, Stories)</option>
-                    <option value="1:1">1:1 (Instagram Post)</option>
-                    <option value="16:9">16:9 (YouTube)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-2">Quality</label>
-                  <select
-                    value={exportSettings.quality}
-                    onChange={(e) => setExportSettings(prev => ({ 
-                      ...prev, 
-                      quality: e.target.value as 'high' | 'medium' | 'low' 
-                    }))}
-                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                  >
-                    <option value="high">High (2000k)</option>
-                    <option value="medium">Medium (1000k)</option>
-                    <option value="low">Low (500k)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-2">Clip Title</label>
-                  <input
-                    type="text"
-                    value={exportSettings.title}
-                    onChange={(e) => setExportSettings(prev => ({ ...prev, title: e.target.value }))}
-                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                    placeholder="Enter clip title"
-                  />
-                </div>
-              </div>
-
-              <button
-                onClick={exportClip}
-                disabled={isExporting}
-                className="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {isExporting ? (
-                  <>
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                    Exporting...
-                  </>
-                ) : (
-                  <>
-                                            <ArrowDownTrayIcon className="w-5 h-5" />
-                    Export Clip
-                  </>
-                )}
-              </button>
             </div>
           </div>
 
-          {/* AI Suggestions Panel */}
-          {showAIPanel && (
-            <div className="lg:col-span-1 space-y-6">
-              {/* Engagement Segments */}
-              <div className="bg-slate-800 rounded-xl p-6">
-                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                  <SparklesIcon className="w-5 h-5 text-purple-500" />
-                  High Engagement
-                </h3>
-                
-                <div className="space-y-3">
-                  {video.engagementSegments?.map((segment, index) => (
-                    <div
-                      key={index}
-                      onClick={() => selectEngagementSegment(segment)}
-                      className={`p-3 rounded-lg cursor-pointer transition-colors ${
-                        selectedSegment === segment 
-                          ? 'bg-purple-600/20 border border-purple-500' 
-                          : 'bg-slate-700 hover:bg-slate-600'
-                      }`}
+          {/* Clip Generation Form */}
+          <div className="lg:col-span-1">
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold mb-4">Generate Clip</h2>
+              
+              {selectedVideo ? (
+                <form onSubmit={generateClip} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Clip Title
+                    </label>
+                    <input
+                      type="text"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder={`${selectedVideo.title} - ${platform} Clip`}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Start Time (s)
+                      </label>
+                      <input
+                        type="number"
+                        value={startTime}
+                        onChange={(e) => setStartTime(Number(e.target.value))}
+                        min="0"
+                        max={selectedVideo.duration - 1}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        End Time (s)
+                      </label>
+                      <input
+                        type="number"
+                        value={endTime}
+                        onChange={(e) => setEndTime(Number(e.target.value))}
+                        min={startTime + 1}
+                        max={Math.min(selectedVideo.duration, startTime + 60)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Platform
+                    </label>
+                    <select
+                      value={platform}
+                      onChange={(e) => setPlatform(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium">
-                          {formatTime(segment.start)} - {formatTime(segment.end)}
-                        </span>
-                        <span className="text-xs bg-green-600 px-2 py-1 rounded">
-                          {segment.score}%
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-400 line-clamp-2">
-                        {segment.text}
-                      </p>
-                      {segment.emotions && (
-                        <div className="flex gap-1 mt-2">
-                          {segment.emotions.map(emotion => (
-                            <span key={emotion} className="text-xs bg-blue-600/20 text-blue-300 px-2 py-1 rounded">
-                              {emotion}
-                            </span>
-                          ))}
+                      <option value="tiktok">TikTok</option>
+                      <option value="instagram">Instagram Reels</option>
+                      <option value="youtube">YouTube Shorts</option>
+                      <option value="twitter">Twitter</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Hook Text (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={hook}
+                      onChange={(e) => setHook(e.target.value)}
+                      placeholder="Viral hook text for the clip"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  {error && (
+                    <div className="text-red-600 text-sm">{error}</div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={loading || endTime <= startTime}
+                    className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loading ? 'Generating...' : 'Generate Clip'}
+                  </button>
+
+                  <div className="text-xs text-gray-500">
+                    Duration: {endTime - startTime}s (max 60s for viral content)
+                  </div>
+                </form>
+              ) : (
+                <p className="text-gray-500">Select a video to generate clips</p>
+              )}
+            </div>
+          </div>
+
+          {/* Generated Clips */}
+          <div className="lg:col-span-1">
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold mb-4">Generated Clips</h2>
+              
+              <div className="space-y-4">
+                {clips.map((clip) => (
+                  <div key={clip.id} className="border border-gray-200 rounded-lg p-4">
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="font-medium text-gray-900">{clip.title}</h3>
+                      <span className={`px-2 py-1 text-xs rounded-full ${
+                        clip.status === 'completed' ? 'bg-green-100 text-green-800' :
+                        clip.status === 'failed' ? 'bg-red-100 text-red-800' :
+                        'bg-yellow-100 text-yellow-800'
+                      }`}>
+                        {clip.status}
+                      </span>
+                    </div>
+                    
+                    <div className="text-sm text-gray-600 mb-2">
+                      {clip.platform} • {clip.startTime}s - {clip.endTime}s
+                    </div>
+
+                    {clip.status === 'rendering' || clip.status === 'processing' ? (
+                      <div className="mb-2">
+                        <div className="flex justify-between text-xs text-gray-600 mb-1">
+                          <span>Processing...</span>
+                          <span>{clip.progress}%</span>
                         </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Hooks */}
-              <div className="bg-slate-800 rounded-xl p-6">
-                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                  <ScissorsIcon className="w-5 h-5 text-green-500" />
-                  Hook Opportunities
-                </h3>
-                
-                <div className="space-y-3">
-                  {video.hooks?.map((hook, index) => (
-                    <div
-                      key={index}
-                      onClick={() => selectHook(hook)}
-                      className={`p-3 rounded-lg cursor-pointer transition-colors ${
-                        selectedHook === hook 
-                          ? 'bg-green-600/20 border border-green-500' 
-                          : 'bg-slate-700 hover:bg-slate-600'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium">
-                          {formatTime(hook.timestamp)}
-                        </span>
-                        <span className={`text-xs px-2 py-1 rounded ${
-                          hook.type === 'question' 
-                            ? 'bg-green-600 text-white' 
-                            : 'bg-yellow-600 text-white'
-                        }`}>
-                          {hook.type}
-                        </span>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                            style={{ width: `${clip.progress}%` }}
+                          ></div>
+                        </div>
                       </div>
-                      <p className="text-xs text-slate-400 mb-2">
-                        {hook.description}
-                      </p>
-                      <p className="text-xs text-slate-300 line-clamp-2">
-                        "{hook.text}"
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
+                    ) : null}
 
-              {/* Quick Actions */}
-              <div className="bg-slate-800 rounded-xl p-6">
-                <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
-                
-                <div className="space-y-2">
-                  <button
-                    onClick={() => {
-                      if (video.engagementSegments?.[0]) {
-                        selectEngagementSegment(video.engagementSegments[0]);
-                      }
-                    }}
-                    className="w-full text-left px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm transition-colors"
-                  >
-                    Use Top Engagement
-                  </button>
-                  
-                  <button
-                    onClick={() => {
-                      if (video.hooks?.[0]) {
-                        selectHook(video.hooks[0]);
-                      }
-                    }}
-                    className="w-full text-left px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm transition-colors"
-                  >
-                    Use Best Hook
-                  </button>
-                  
-                  <button
-                    onClick={() => {
-                      setClipStart(0);
-                      setClipEnd(Math.min(60, video.duration));
-                    }}
-                    className="w-full text-left px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm transition-colors"
-                  >
-                    First Minute Clip
-                  </button>
-                </div>
+                    {clip.status === 'completed' && clip.url && (
+                      <div className="mt-2">
+                        <a
+                          href={clip.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                        >
+                          Download Clip
+                        </a>
+                      </div>
+                    )}
+
+                    {clip.status === 'failed' && clip.error && (
+                      <div className="text-red-600 text-sm mt-2">
+                        Error: {clip.error}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {clips.length === 0 && (
+                  <p className="text-gray-500 text-center py-4">
+                    No clips generated yet
+                  </p>
+                )}
               </div>
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>

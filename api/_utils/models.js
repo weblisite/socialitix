@@ -116,6 +116,20 @@ export class ClipModel {
     return data;
   }
 
+  static async findByRenderID(renderId) {
+    const { data, error } = await supabaseAdmin
+      .from('clips')
+      .select(`
+        *,
+        videos!inner(title, filename)
+      `)
+      .eq('file_path', renderId) // render ID is stored in file_path during processing
+      .single();
+    
+    if (error) throw error;
+    return data;
+  }
+
   static async create(clipData) {
     const { data, error } = await supabaseAdmin
       .from('clips')

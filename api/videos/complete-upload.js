@@ -47,12 +47,12 @@ async function handler(req, res) {
       storage_path: filePath,
       storage_bucket: 'videos',
       url: publicUrl,
-      analysis_status: 'queued',
-      processing_progress: 0,
+      analysis_status: 'ready', // Video is ready for clip generation
+      processing_progress: 100, // Upload complete, ready for processing
       format: fileName.split('.').pop()?.toLowerCase() || 'mp4',
-      duration: 0,
-      width: 0,
-      height: 0,
+      duration: 0, // Will be determined when clips are generated
+      width: 0, // Will be determined when clips are generated  
+      height: 0, // Will be determined when clips are generated
       ai_suggestions: {
         clips: [],
         bestMoments: [],
@@ -64,28 +64,16 @@ async function handler(req, res) {
     const video = await VideoModel.create(videoData);
     console.log('Video record created:', video.id);
 
-    // Queue video processing job
-    console.log('Queuing processing job for video:', video.id);
-    const processingJob = await JobQueue.addJob('process_video', {
-      videoId: video.id,
-      filePath: filePath,
-      userId: userId,
-      fileName: fileName,
-      fileSize: fileInfo.size,
-    }, 'high');
-    console.log('Processing job queued:', processingJob.id);
-
-    // Queue AI analysis job (lower priority)
+    // Queue AI analysis job for content analysis (optional)
     console.log('Queuing AI analysis job for video:', video.id);
-    const aiJob = await JobQueue.addJob('ai_analysis', {
+    const aiJob = await JobQueue.addJob('analyze_video', {
       videoId: video.id,
-      filePath: filePath,
       userId: userId,
     }, 'normal');
     console.log('AI analysis job queued:', aiJob.id);
 
     res.status(201).json({
-      message: 'Video upload completed and queued for processing',
+      message: 'Video upload completed and ready for clip generation',
       video: {
         id: video.id,
         title: video.title,
@@ -98,7 +86,6 @@ async function handler(req, res) {
         created_at: video.created_at,
       },
       jobs: {
-        processing: processingJob.id,
         ai_analysis: aiJob.id,
       }
     });

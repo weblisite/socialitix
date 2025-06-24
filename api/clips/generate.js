@@ -1,6 +1,6 @@
-import { VideoModel } from '../_utils/models.js';
+import { ClipModel, VideoModel } from '../_utils/models.js';
+import { ShotstackService } from '../_utils/shotstack.js';
 import { JobQueue } from '../_utils/jobQueue.js';
-import { AIService } from '../_utils/aiService.js';
 import { requireAuth } from '../_utils/auth.js';
 import { withCors } from '../_utils/cors.js';
 
@@ -10,87 +10,157 @@ async function handler(req, res) {
   }
 
   try {
-    const { videoId, settings } = req.body;
+    const { 
+      videoId, 
+      startTime, 
+      endTime, 
+      title, 
+      platform = 'tiktok',
+      hook = '',
+      style = {}
+    } = req.body;
+    
     const userId = req.user?.id;
 
-    if (!videoId) {
+    console.log('Generate clip request:', { 
+      videoId, 
+      startTime, 
+      endTime, 
+      title, 
+      platform, 
+      hook,
+      userId 
+    });
+
+    // Validation
+    if (!videoId || startTime === undefined || endTime === undefined) {
       return res.status(400).json({ 
-        error: 'Video ID is required' 
+        error: 'Missing required fields: videoId, startTime, endTime' 
       });
     }
 
-    // Verify video belongs to user
-    const video = await VideoModel.findById(videoId, userId);
+    if (!userId) {
+      return res.status(401).json({ 
+        error: 'User authentication required' 
+      });
+    }
+
+    if (startTime >= endTime) {
+      return res.status(400).json({ 
+        error: 'Start time must be less than end time' 
+      });
+    }
+
+    if (endTime - startTime > 60) {
+      return res.status(400).json({ 
+        error: 'Clip duration cannot exceed 60 seconds for viral content' 
+      });
+    }
+
+    // Get the source video
+    console.log('Fetching video:', videoId);
+    const video = await VideoModel.findById(videoId);
+    
     if (!video) {
       return res.status(404).json({ 
-        error: 'Video not found or access denied' 
+        error: 'Video not found' 
       });
     }
 
-    // Get AI suggestions for clips if not already available
-    let clipSuggestions = video.ai_suggestions?.clips || [];
-    
-    if (clipSuggestions.length === 0) {
-      // Generate AI suggestions first
-      const analysis = await AIService.analyzeVideo({
-        videoId,
-        duration: video.duration,
-        metadata: { width: video.width, height: video.height }
-      });
-      
-      clipSuggestions = analysis.suggestedClips || [];
-      
-      // Update video with suggestions
-      await VideoModel.update(videoId, {
-        ai_suggestions: {
-          ...video.ai_suggestions,
-          clips: clipSuggestions,
-          bestMoments: analysis.bestMoments || [],
-          overallScore: analysis.viralScore || 0
-        }
+    if (video.user_id !== userId) {
+      return res.status(403).json({ 
+        error: 'Access denied: Not your video' 
       });
     }
 
-    // Filter clips based on settings
-    const filteredClips = clipSuggestions
-      .filter(clip => clip.viralPotential >= (settings?.viralThreshold || 75) / 100)
-      .slice(0, settings?.maxClips || 5);
-
-    if (filteredClips.length === 0) {
-      return res.status(400).json({
-        error: 'No clips meet the specified criteria',
-        suggestions: 'Try lowering the viral threshold or increasing max clips'
+    if (!video.url) {
+      return res.status(400).json({ 
+        error: 'Video URL not available. Upload may not be complete.' 
       });
     }
 
-    // Queue clip generation job
-    const job = await JobQueue.addJob('generate_clips', {
-      videoId,
-      userId,
-      clips: filteredClips,
-      settings: {
-        platforms: settings?.platforms || ['TikTok', 'Instagram', 'YouTube'],
-        clipDuration: settings?.clipDuration || 60,
-        autoGenerate: settings?.autoGenerate || true
-      }
-    }, 'normal');
+    // Create clip record in database first
+    const clipData = {
+      user_id: userId,
+      video_id: videoId,
+      title: title || `${video.title} - Clip`,
+      description: `Viral ${platform} clip from ${startTime}s to ${endTime}s`,
+      start_time: startTime,
+      end_time: endTime,
+      platform: platform,
+      status: 'processing',
+      hook: hook,
+      type: 'short',
+      ai_score: 0, // Will be updated after AI analysis
+      views: 0,
+      likes: 0,
+      shares: 0
+    };
 
-    res.json({
-      message: 'Clip generation started',
-      jobId: job.id,
-      clipsQueued: filteredClips.length,
-      clips: filteredClips.map(clip => ({
+    console.log('Creating clip record:', clipData);
+    const clip = await ClipModel.create(clipData);
+    console.log('Clip record created:', clip.id);
+
+    // Generate clip using Shotstack
+    console.log('Starting Shotstack render for clip:', clip.id);
+    const renderResult = await ShotstackService.generateClip({
+      videoUrl: video.url,
+      startTime: startTime,
+      endTime: endTime,
+      platform: platform,
+      hook: hook,
+      style: style
+    });
+
+    console.log('Shotstack render started:', renderResult);
+
+    // Update clip with render ID
+    await ClipModel.update(clip.id, {
+      file_path: renderResult.renderId, // Store render ID temporarily
+      status: 'rendering'
+    });
+
+    // Queue a job to check render status
+    console.log('Queuing render status check job');
+    const statusJob = await JobQueue.addJob('check_render_status', {
+      clipId: clip.id,
+      renderId: renderResult.renderId,
+      platform: platform,
+      userId: userId
+    }, 'high');
+
+    console.log('Status check job queued:', statusJob.id);
+
+    // Return immediate response
+    res.status(201).json({
+      message: 'Clip generation started successfully',
+      clip: {
+        id: clip.id,
         title: clip.title,
-        duration: clip.end - clip.start,
-        viralPotential: clip.viralPotential,
-        description: clip.description
-      }))
+        description: clip.description,
+        startTime: clip.start_time,
+        endTime: clip.end_time,
+        platform: clip.platform,
+        status: 'rendering',
+        hook: clip.hook,
+        renderId: renderResult.renderId,
+        estimatedTime: '30-60 seconds',
+        created_at: clip.created_at
+      },
+      render: {
+        id: renderResult.renderId,
+        status: renderResult.status,
+        message: renderResult.message
+      },
+      jobs: {
+        statusCheck: statusJob.id
+      }
     });
 
   } catch (error) {
-    console.error('Clip generation error:', error);
+    console.error('Error generating clip:', error);
     res.status(500).json({ 
-      error: 'Failed to generate clips',
+      error: 'Failed to generate clip',
       message: error.message 
     });
   }

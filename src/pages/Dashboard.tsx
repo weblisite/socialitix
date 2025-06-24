@@ -5,7 +5,7 @@ import { useAuthStore } from '../stores/authStore';
 import { VideoLibrary } from './VideoLibrary';
 import { ClipLibrary } from './ClipLibrary';
 import { VideoUpload } from './VideoUpload';
-import { VideoEditor } from './VideoEditor';
+import VideoEditor from './VideoEditor';
 import { Analytics } from './Analytics';
 import { Profile } from './Profile';
 import { Settings } from './Settings';
