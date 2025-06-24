@@ -27,32 +27,52 @@ async function handler(req, res) {
       });
     }
 
-    console.log('Getting file info for:', filePath);
-    // Get file info from Supabase Storage
-    const fileInfo = await StorageService.getFileInfo(filePath);
-    console.log('File info retrieved:', fileInfo);
+    // Step 1: Get file info from Supabase Storage
+    console.log('Step 1: Getting file info for:', filePath);
+    let fileInfo;
+    try {
+      fileInfo = await StorageService.getFileInfo(filePath);
+      console.log('File info retrieved:', fileInfo);
+    } catch (error) {
+      console.error('Error getting file info:', error);
+      return res.status(500).json({ 
+        error: 'Failed to get file info',
+        message: error.message,
+        step: 'getFileInfo'
+      });
+    }
     
-    console.log('Generating download URL for:', filePath);
-    // Generate public URL for the uploaded file
-    const publicUrl = await StorageService.generateDownloadUrl(filePath);
-    console.log('Download URL generated:', publicUrl);
+    // Step 2: Generate public URL for the uploaded file
+    console.log('Step 2: Generating download URL for:', filePath);
+    let publicUrl;
+    try {
+      publicUrl = await StorageService.generateDownloadUrl(filePath);
+      console.log('Download URL generated:', publicUrl);
+    } catch (error) {
+      console.error('Error generating download URL:', error);
+      return res.status(500).json({ 
+        error: 'Failed to generate download URL',
+        message: error.message,
+        step: 'generateDownloadUrl'
+      });
+    }
     
-    // Create video record in database
+    // Step 3: Create video record in database with minimal required fields
     const videoData = {
       user_id: userId,
       title: title || fileName,
       filename: fileName,
       original_filename: fileName,
-      file_size: fileInfo.size,
+      file_size: fileInfo?.size || 0,
       storage_path: filePath,
       storage_bucket: 'videos',
       url: publicUrl,
-      analysis_status: 'ready', // Video is ready for clip generation
-      processing_progress: 100, // Upload complete, ready for processing
+      analysis_status: 'ready',
+      processing_progress: 100,
       format: fileName.split('.').pop()?.toLowerCase() || 'mp4',
-      duration: 0, // Will be determined when clips are generated
-      width: 0, // Will be determined when clips are generated  
-      height: 0, // Will be determined when clips are generated
+      duration: 0,
+      width: 0,
+      height: 0,
       ai_suggestions: {
         clips: [],
         bestMoments: [],
@@ -60,19 +80,38 @@ async function handler(req, res) {
       }
     };
 
-    console.log('Creating video record with data:', videoData);
-    const video = await VideoModel.create(videoData);
-    console.log('Video record created:', video.id);
+    console.log('Step 3: Creating video record with data:', JSON.stringify(videoData, null, 2));
+    let video;
+    try {
+      video = await VideoModel.create(videoData);
+      console.log('Video record created successfully:', video.id);
+    } catch (error) {
+      console.error('Error creating video record:', error);
+      console.error('Error details:', JSON.stringify(error, null, 2));
+      return res.status(500).json({ 
+        error: 'Failed to create video record',
+        message: error.message,
+        step: 'createVideoRecord',
+        details: error
+      });
+    }
 
-    // Queue AI analysis job for content analysis (optional)
-    console.log('Queuing AI analysis job for video:', video.id);
-    const aiJob = await JobQueue.addJob('analyze_video', {
-      videoId: video.id,
-      userId: userId,
-    }, 'normal');
-    console.log('AI analysis job queued:', aiJob.id);
+    // Step 4: Queue AI analysis job (optional, non-blocking)
+    console.log('Step 4: Queuing AI analysis job for video:', video.id);
+    let aiJob = null;
+    try {
+      aiJob = await JobQueue.addJob('analyze_video', {
+        videoId: video.id,
+        userId: userId,
+      }, 'normal');
+      console.log('AI analysis job queued successfully:', aiJob.id);
+    } catch (error) {
+      console.error('Error queuing AI analysis job (non-critical):', error);
+      // Don't fail the request if job queueing fails
+    }
 
-    res.status(201).json({
+    // Success response
+    const response = {
       message: 'Video upload completed and ready for clip generation',
       video: {
         id: video.id,
@@ -86,15 +125,20 @@ async function handler(req, res) {
         created_at: video.created_at,
       },
       jobs: {
-        ai_analysis: aiJob.id,
+        ai_analysis: aiJob?.id || null,
       }
-    });
+    };
+
+    console.log('Upload completed successfully:', response);
+    res.status(201).json(response);
 
   } catch (error) {
-    console.error('Error completing upload:', error);
+    console.error('Unexpected error in complete-upload:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ 
-      error: 'Failed to complete upload',
-      message: error.message 
+      error: 'Internal server error',
+      message: error.message,
+      step: 'unexpected'
     });
   }
 }
