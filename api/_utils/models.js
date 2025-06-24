@@ -83,4 +83,59 @@ export class VideoModel {
     if (error) throw error;
     return data;
   }
+}
+
+export class ClipModel {
+  static async findByUserId(userId, limit = 10, offset = 0) {
+    const { data, error } = await supabaseAdmin
+      .from('clips')
+      .select(`
+        *,
+        videos!inner(title, filename)
+      `)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+      .range(offset, offset + limit - 1);
+    
+    if (error) throw error;
+    return data || [];
+  }
+
+  static async findById(id) {
+    const { data, error } = await supabaseAdmin
+      .from('clips')
+      .select(`
+        *,
+        videos!inner(title, filename)
+      `)
+      .eq('id', id)
+      .single();
+    
+    if (error) throw error;
+    return data;
+  }
+
+  static async create(clipData) {
+    const { data, error } = await supabaseAdmin
+      .from('clips')
+      .insert(clipData)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    return data;
+  }
+
+  static async update(id, updates) {
+    const { data, error } = await supabaseAdmin
+      .from('clips')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    return data;
+  }
 } 
