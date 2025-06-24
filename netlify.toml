@@ -1,7 +1,7 @@
 # Netlify configuration for full-stack deployment
 [build]
   # Build command for both frontend and functions
-  command = "npm ci && cd frontend && npm ci && npm run build"
+  command = "npm install && cd frontend && npm install && npm run build"
   
   # Directory to publish (frontend build output)
   publish = "frontend/dist"
