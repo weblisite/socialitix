@@ -124,14 +124,13 @@ export function VideoEditor() {
   // Initialize WaveSurfer
   useEffect(() => {
     if (waveformRef.current && video && !wavesurferRef.current) {
-      wavesurferRef.current = WaveSurfer.create({
+      const wavesurfer = WaveSurfer.create({
         container: waveformRef.current,
-        waveColor: '#6366f1',
+        waveColor: '#64748b',
         progressColor: '#4f46e5',
         cursorColor: '#ef4444',
         barWidth: 2,
         barRadius: 1,
-        responsive: true,
         height: 80,
         normalize: true,
         backend: 'WebAudio',
@@ -139,25 +138,26 @@ export function VideoEditor() {
       });
 
       // Load audio from video
+      wavesurferRef.current = wavesurfer;
       wavesurferRef.current.load(video.url);
 
       // Sync with video player
-      wavesurferRef.current.on('audioprocess', (time) => {
+      wavesurferRef.current.on('audioprocess', (time: number) => {
         setCurrentTime(time);
         if (videoRef.current) {
           videoRef.current.currentTime = time;
         }
       });
 
-      wavesurferRef.current.on('seek', (progress) => {
-        const time = progress * video.duration;
+      (wavesurferRef.current as any).on('seek', (progress: number) => {
+        const time = (progress || 0) * (video.duration || 0);
         setCurrentTime(time);
         if (videoRef.current) {
           videoRef.current.currentTime = time;
         }
       });
 
-      wavesurferRef.current.on('ready', () => {
+      wavesurfer.on('ready', () => {
         // Add engagement segment overlays
         if (video.engagementSegments) {
           video.engagementSegments.forEach((segment, index) => {
