@@ -127,10 +127,15 @@ ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE videos ENABLE ROW LEVEL SECURITY;
 
 -- ============================================
--- Create RLS policies
+-- Create RLS policies (with conflict handling)
 -- ============================================
 
--- Clips policies
+-- Clips policies (drop and recreate to avoid conflicts)
+DROP POLICY IF EXISTS "Users can view their own clips" ON clips;
+DROP POLICY IF EXISTS "Users can insert their own clips" ON clips;
+DROP POLICY IF EXISTS "Users can update their own clips" ON clips;
+DROP POLICY IF EXISTS "Users can delete their own clips" ON clips;
+
 CREATE POLICY "Users can view their own clips" ON clips
     FOR SELECT USING (auth.uid() = user_id);
 
@@ -143,7 +148,11 @@ CREATE POLICY "Users can update their own clips" ON clips
 CREATE POLICY "Users can delete their own clips" ON clips
     FOR DELETE USING (auth.uid() = user_id);
 
--- Users policies
+-- Users policies (drop and recreate to avoid conflicts)
+DROP POLICY IF EXISTS "Users can view their own profile" ON users;
+DROP POLICY IF EXISTS "Users can update their own profile" ON users;
+DROP POLICY IF EXISTS "Users can insert their own profile" ON users;
+
 CREATE POLICY "Users can view their own profile" ON users
     FOR SELECT USING (auth.uid() = id);
 
@@ -153,7 +162,12 @@ CREATE POLICY "Users can update their own profile" ON users
 CREATE POLICY "Users can insert their own profile" ON users
     FOR INSERT WITH CHECK (auth.uid() = id);
 
--- Videos policies
+-- Videos policies (drop and recreate to avoid conflicts)
+DROP POLICY IF EXISTS "Users can view their own videos" ON videos;
+DROP POLICY IF EXISTS "Users can insert their own videos" ON videos;
+DROP POLICY IF EXISTS "Users can update their own videos" ON videos;
+DROP POLICY IF EXISTS "Users can delete their own videos" ON videos;
+
 CREATE POLICY "Users can view their own videos" ON videos
     FOR SELECT USING (auth.uid() = user_id);
 
@@ -179,17 +193,20 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create triggers for updated_at
+-- Create triggers for updated_at (drop existing first to avoid conflicts)
+DROP TRIGGER IF EXISTS update_clips_updated_at ON clips;
 CREATE TRIGGER update_clips_updated_at
     BEFORE UPDATE ON clips
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at
     BEFORE UPDATE ON users
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_videos_updated_at ON videos;
 CREATE TRIGGER update_videos_updated_at
     BEFORE UPDATE ON videos
     FOR EACH ROW
