@@ -121,32 +121,63 @@ export class StorageService {
   // Get file info from Supabase Storage
   static async getFileInfo(filePath) {
     try {
+      // Try to get file info by attempting to create a signed URL first
+      // This will fail if the file doesn't exist
+      const { data: urlData, error: urlError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .createSignedUrl(filePath, 60); // 1 minute expiry just for testing
+
+      if (urlError) {
+        console.error('File not found or inaccessible:', urlError);
+        throw new Error('File not found: ' + urlError.message);
+      }
+
+      // If we can create a URL, the file exists
+      // For file size, we'll try to get it from the directory listing
+      const pathParts = filePath.split('/');
+      const fileName = pathParts.pop();
+      const directoryPath = pathParts.join('/');
+
       const { data, error } = await supabase.storage
         .from(BUCKET_NAME)
-        .list(filePath.split('/').slice(0, -1).join('/'), {
-          search: filePath.split('/').pop()
+        .list(directoryPath, {
+          search: fileName
         });
 
       if (error) {
-        console.error('Supabase file info error:', error);
-        throw new Error('Failed to get file info: ' + error.message);
+        console.warn('Could not get detailed file info, using defaults:', error);
+        // Return basic info if we can't get detailed info
+        return {
+          name: fileName,
+          size: 0, // Default size - will be updated during processing
+          type: 'video/' + (fileName.split('.').pop()?.toLowerCase() || 'mp4'),
+          lastModified: new Date().toISOString(),
+          metadata: {},
+        };
       }
 
-      const fileInfo = data?.[0];
+      const fileInfo = data?.find(f => f.name === fileName);
       if (!fileInfo) {
-        throw new Error('File not found');
+        // File exists (we could create URL) but no detailed info available
+        return {
+          name: fileName,
+          size: 0,
+          type: 'video/' + (fileName.split('.').pop()?.toLowerCase() || 'mp4'),
+          lastModified: new Date().toISOString(),
+          metadata: {},
+        };
       }
 
       return {
         name: fileInfo.name,
         size: fileInfo.metadata?.size || 0,
-        type: fileInfo.metadata?.mimetype || 'application/octet-stream',
+        type: fileInfo.metadata?.mimetype || ('video/' + (fileName.split('.').pop()?.toLowerCase() || 'mp4')),
         lastModified: fileInfo.updated_at,
-        metadata: fileInfo.metadata,
+        metadata: fileInfo.metadata || {},
       };
     } catch (error) {
       console.error('Error getting file info:', error);
-      throw new Error('Failed to get file info');
+      throw new Error('Failed to get file info: ' + error.message);
     }
   }
 

@@ -13,17 +13,29 @@ async function handler(req, res) {
     const { filePath, fileName, title } = req.body;
     const userId = req.user?.id;
 
+    console.log('Complete upload request:', { filePath, fileName, title, userId });
+
     if (!filePath || !fileName) {
       return res.status(400).json({ 
         error: 'Missing required fields: filePath, fileName' 
       });
     }
 
+    if (!userId) {
+      return res.status(401).json({ 
+        error: 'User authentication required' 
+      });
+    }
+
+    console.log('Getting file info for:', filePath);
     // Get file info from Supabase Storage
     const fileInfo = await StorageService.getFileInfo(filePath);
+    console.log('File info retrieved:', fileInfo);
     
+    console.log('Generating download URL for:', filePath);
     // Generate public URL for the uploaded file
     const publicUrl = await StorageService.generateDownloadUrl(filePath);
+    console.log('Download URL generated:', publicUrl);
     
     // Create video record in database
     const videoData = {
@@ -48,9 +60,12 @@ async function handler(req, res) {
       }
     };
 
+    console.log('Creating video record with data:', videoData);
     const video = await VideoModel.create(videoData);
+    console.log('Video record created:', video.id);
 
     // Queue video processing job
+    console.log('Queuing processing job for video:', video.id);
     const processingJob = await JobQueue.addJob('process_video', {
       videoId: video.id,
       filePath: filePath,
@@ -58,13 +73,16 @@ async function handler(req, res) {
       fileName: fileName,
       fileSize: fileInfo.size,
     }, 'high');
+    console.log('Processing job queued:', processingJob.id);
 
     // Queue AI analysis job (lower priority)
+    console.log('Queuing AI analysis job for video:', video.id);
     const aiJob = await JobQueue.addJob('ai_analysis', {
       videoId: video.id,
       filePath: filePath,
       userId: userId,
     }, 'normal');
+    console.log('AI analysis job queued:', aiJob.id);
 
     res.status(201).json({
       message: 'Video upload completed and queued for processing',
