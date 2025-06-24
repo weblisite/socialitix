@@ -39,21 +39,46 @@ CREATE INDEX IF NOT EXISTS idx_clips_created_at ON clips(created_at);
 CREATE INDEX IF NOT EXISTS idx_clips_ai_score ON clips(ai_score);
 
 -- ============================================
--- Create users table if it doesn't exist
+-- Create/Update users table
 -- ============================================
 
+-- Create users table if it doesn't exist
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     email TEXT UNIQUE NOT NULL,
     full_name TEXT,
     avatar_url TEXT,
-    subscription_plan TEXT DEFAULT 'free' CHECK (subscription_plan IN ('free', 'pro', 'enterprise')),
-    subscription_status TEXT DEFAULT 'active' CHECK (subscription_status IN ('active', 'cancelled', 'expired')),
-    storage_used BIGINT DEFAULT 0,
-    storage_limit BIGINT DEFAULT 5368709120, -- 5GB in bytes
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Add columns if they don't exist
+DO $$ 
+BEGIN
+    -- Add subscription_plan column if it doesn't exist
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'users' AND column_name = 'subscription_plan') THEN
+        ALTER TABLE users ADD COLUMN subscription_plan TEXT DEFAULT 'free' CHECK (subscription_plan IN ('free', 'pro', 'enterprise'));
+    END IF;
+    
+    -- Add subscription_status column if it doesn't exist
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'users' AND column_name = 'subscription_status') THEN
+        ALTER TABLE users ADD COLUMN subscription_status TEXT DEFAULT 'active' CHECK (subscription_status IN ('active', 'cancelled', 'expired'));
+    END IF;
+    
+    -- Add storage_used column if it doesn't exist
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'users' AND column_name = 'storage_used') THEN
+        ALTER TABLE users ADD COLUMN storage_used BIGINT DEFAULT 0;
+    END IF;
+    
+    -- Add storage_limit column if it doesn't exist
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'users' AND column_name = 'storage_limit') THEN
+        ALTER TABLE users ADD COLUMN storage_limit BIGINT DEFAULT 5368709120; -- 5GB in bytes
+    END IF;
+END $$;
 
 -- Create indexes for users table
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -174,25 +199,54 @@ CREATE TRIGGER update_videos_updated_at
 -- Create views for analytics
 -- ============================================
 
--- User analytics view
-CREATE OR REPLACE VIEW user_analytics AS
-SELECT 
-    u.id,
-    u.email,
-    u.full_name,
-    u.subscription_plan,
-    COUNT(DISTINCT v.id) as total_videos,
-    COUNT(DISTINCT c.id) as total_clips,
-    COALESCE(SUM(v.file_size), 0) as storage_used_bytes,
-    pg_size_pretty(COALESCE(SUM(v.file_size), 0)) as storage_used_human,
-    AVG(c.ai_score) as avg_ai_score,
-    SUM(c.views) as total_views,
-    SUM(c.likes) as total_likes,
-    SUM(c.shares) as total_shares
-FROM users u
-LEFT JOIN videos v ON u.id = v.user_id
-LEFT JOIN clips c ON v.id = c.video_id
-GROUP BY u.id, u.email, u.full_name, u.subscription_plan;
+-- User analytics view (created after columns are added)
+DO $$
+BEGIN
+    -- Only create the view if subscription_plan column exists
+    IF EXISTS (SELECT 1 FROM information_schema.columns 
+               WHERE table_name = 'users' AND column_name = 'subscription_plan') THEN
+        
+        CREATE OR REPLACE VIEW user_analytics AS
+        SELECT 
+            u.id,
+            u.email,
+            u.full_name,
+            u.subscription_plan,
+            COUNT(DISTINCT v.id) as total_videos,
+            COUNT(DISTINCT c.id) as total_clips,
+            COALESCE(SUM(v.file_size), 0) as storage_used_bytes,
+            pg_size_pretty(COALESCE(SUM(v.file_size), 0)) as storage_used_human,
+            AVG(c.ai_score) as avg_ai_score,
+            SUM(c.views) as total_views,
+            SUM(c.likes) as total_likes,
+            SUM(c.shares) as total_shares
+        FROM users u
+        LEFT JOIN videos v ON u.id = v.user_id
+        LEFT JOIN clips c ON v.id = c.video_id
+        GROUP BY u.id, u.email, u.full_name, u.subscription_plan;
+        
+    ELSE
+        -- Create a simpler view without subscription_plan
+        CREATE OR REPLACE VIEW user_analytics AS
+        SELECT 
+            u.id,
+            u.email,
+            u.full_name,
+            'free'::text as subscription_plan,
+            COUNT(DISTINCT v.id) as total_videos,
+            COUNT(DISTINCT c.id) as total_clips,
+            COALESCE(SUM(v.file_size), 0) as storage_used_bytes,
+            pg_size_pretty(COALESCE(SUM(v.file_size), 0)) as storage_used_human,
+            AVG(c.ai_score) as avg_ai_score,
+            SUM(c.views) as total_views,
+            SUM(c.likes) as total_likes,
+            SUM(c.shares) as total_shares
+        FROM users u
+        LEFT JOIN videos v ON u.id = v.user_id
+        LEFT JOIN clips c ON v.id = c.video_id
+        GROUP BY u.id, u.email, u.full_name;
+    END IF;
+END $$;
 
 -- Clip performance view
 CREATE OR REPLACE VIEW clip_performance AS
