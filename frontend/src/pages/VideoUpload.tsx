@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react';
+import { useDirectUpload } from '../hooks/useDirectUpload';
 import { supabase } from '../lib/supabase';
 
 interface UploadedFile {
@@ -11,6 +12,7 @@ interface UploadedFile {
   thumbnail?: string;
   duration?: string;
   aiClipsGenerated?: number;
+  videoId?: string;
 }
 
 interface AISettings {
@@ -33,6 +35,51 @@ export const VideoUpload: React.FC = () => {
     platforms: ['TikTok', 'Instagram', 'YouTube'],
     clipDuration: 60,
     maxClips: 5
+  });
+
+  const { uploadFile } = useDirectUpload({
+    onProgress: (progress) => {
+      // Update progress for the currently uploading file
+      setUploadedFiles(prev => 
+        prev.map(f => 
+          f.status === 'uploading' 
+            ? { ...f, progress: progress.percentage }
+            : f
+        )
+      );
+    },
+    onComplete: (result) => {
+      if (result.success && result.videoId) {
+        // Update file status to processing and start polling
+        setUploadedFiles(prev => 
+          prev.map(f => 
+            f.status === 'uploading' 
+              ? { 
+                  ...f, 
+                  status: 'processing',
+                  progress: 100,
+                  videoId: result.videoId,
+                  duration: 'Processing...'
+                }
+              : f
+          )
+        );
+        
+        // Start polling for processing status
+        if (result.videoId) {
+          pollProcessingStatus(result.videoId);
+        }
+      } else {
+        // Mark as error
+        setUploadedFiles(prev => 
+          prev.map(f => 
+            f.status === 'uploading' 
+              ? { ...f, status: 'error' }
+              : f
+          )
+        );
+      }
+    }
   });
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -59,12 +106,14 @@ export const VideoUpload: React.FC = () => {
     }
   }, []);
 
-  const handleFiles = (files: File[]) => {
+  const handleFiles = async (files: File[]) => {
     const videoFiles = files.filter(file => file.type.startsWith('video/'));
     
-    videoFiles.forEach(file => {
+    for (const file of videoFiles) {
+      const fileId = Math.random().toString(36).substr(2, 9);
+      
       const newFile: UploadedFile = {
-        id: Math.random().toString(36).substr(2, 9),
+        id: fileId,
         name: file.name,
         size: file.size,
         type: file.type,
@@ -75,17 +124,11 @@ export const VideoUpload: React.FC = () => {
       };
 
       setUploadedFiles(prev => [...prev, newFile]);
-      uploadToBackend(file, newFile.id);
-    });
-  };
 
-  const uploadToBackend = async (file: File, fileId: string) => {
-    try {
-      // Get the current session token from Supabase
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
-        console.error('No active session found. User needs to be logged in.');
+      try {
+        await uploadFile(file, file.name);
+      } catch (error) {
+        console.error('Upload failed:', error);
         setUploadedFiles(prev => 
           prev.map(f => 
             f.id === fileId 
@@ -93,223 +136,68 @@ export const VideoUpload: React.FC = () => {
               : f
           )
         );
-        return;
       }
-
-      const formData = new FormData();
-      formData.append('video', file);
-
-      // Create XMLHttpRequest for upload progress tracking
-      const xhr = new XMLHttpRequest();
-      
-      // Set up progress tracking
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          const progress = Math.round((event.loaded / event.total) * 100);
-          setUploadedFiles(prev => 
-            prev.map(f => 
-              f.id === fileId 
-                ? { ...f, progress }
-                : f
-            )
-          );
-        }
-      };
-
-      // Set up completion handler
-      xhr.onload = () => {
-        console.log('Upload completed with status:', xhr.status);
-        console.log('Response text:', xhr.responseText);
-        
-        if (xhr.status === 201) {
-          try {
-            const response = JSON.parse(xhr.responseText);
-            console.log('Parsed upload response:', response);
-            
-            setUploadedFiles(prev => 
-              prev.map(f => 
-                f.id === fileId 
-                  ? { 
-                      ...f, 
-                      status: 'processing',
-                      progress: 100,
-                      duration: 'Processing...'
-                    }
-                  : f
-              )
-            );
-
-            // Start polling for processing status
-            if (response.video && response.video.id) {
-              console.log('Starting polling for video ID:', response.video.id);
-              pollProcessingStatus(fileId, response.video.id);
-            } else {
-              console.error('No video ID in response:', response);
-              setUploadedFiles(prev => 
-                prev.map(f => 
-                  f.id === fileId 
-                    ? { ...f, status: 'error' }
-                    : f
-                )
-              );
-            }
-          } catch (parseError) {
-            console.error('Failed to parse upload response:', parseError);
-            console.error('Raw response:', xhr.responseText);
-            setUploadedFiles(prev => 
-              prev.map(f => 
-                f.id === fileId 
-                  ? { ...f, status: 'error' }
-                  : f
-              )
-            );
-          }
-        } else {
-          console.error('Upload failed with status:', xhr.status, xhr.responseText);
-          setUploadedFiles(prev => 
-            prev.map(f => 
-              f.id === fileId 
-                ? { ...f, status: 'error' }
-                : f
-            )
-          );
-        }
-      };
-
-      // Set up error handler
-      xhr.onerror = () => {
-        console.error('Upload request failed');
-        setUploadedFiles(prev => 
-          prev.map(f => 
-            f.id === fileId 
-              ? { ...f, status: 'error' }
-              : f
-          )
-        );
-      };
-
-      // Send the request
-              xhr.open('POST', '/api/videos/upload');
-      xhr.setRequestHeader('Authorization', `Bearer ${session.access_token}`);
-      xhr.send(formData);
-
-    } catch (error) {
-      console.error('Upload failed:', error);
-      setUploadedFiles(prev => 
-        prev.map(f => 
-          f.id === fileId 
-            ? { ...f, status: 'error' }
-            : f
-        )
-      );
     }
   };
 
-  const pollProcessingStatus = async (fileId: string, videoId: string) => {
-    const maxAttempts = 60; // Poll for up to 5 minutes (60 * 3 seconds)
+  const pollProcessingStatus = async (videoId: string) => {
+    const maxAttempts = 60; // 5 minutes with 5-second intervals
     let attempts = 0;
 
     const poll = async () => {
       try {
         attempts++;
-        console.log(`Polling video status (attempt ${attempts}/${maxAttempts}) for video ${videoId}`);
-
-        // Get the current session token from Supabase
-        const { data: { session } } = await supabase.auth.getSession();
         
-        const response = await fetch(`/api/videos/${videoId}`, {
+        const response = await fetch(`/api/videos/${videoId}/status`, {
           headers: {
-            'Authorization': session?.access_token ? `Bearer ${session.access_token}` : '',
-            'Content-Type': 'application/json'
-          }
+            'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
+          },
         });
 
         if (response.ok) {
           const data = await response.json();
-          const video = data.video;
           
-          console.log(`Video status: ${video.status}, progress: ${video.progress}%`);
-
-          if (video.status === 'completed') {
-            // Processing completed successfully
-            const clipsGenerated = aiSettings.autoGenerate 
-              ? Math.floor(Math.random() * aiSettings.maxClips) + 1 
-              : 0;
-            
-            setUploadedFiles(prev => 
-              prev.map(f => 
-                f.id === fileId 
-                  ? { 
-                      ...f, 
-                      status: 'completed',
-                      duration: video.duration ? `${Math.floor(video.duration / 60)}:${(video.duration % 60).toString().padStart(2, '0')}` : '0:00',
-                      aiClipsGenerated: clipsGenerated
-                    }
-                  : f
-              )
-            );
-            return; // Stop polling
-          } else if (video.status === 'failed') {
-            // Processing failed
-            setUploadedFiles(prev => 
-              prev.map(f => 
-                f.id === fileId 
-                  ? { ...f, status: 'error' }
-                  : f
-              )
-            );
-            return; // Stop polling
-          } else if (video.status === 'processing') {
-            // Still processing, update progress
-            setUploadedFiles(prev => 
-              prev.map(f => 
-                f.id === fileId 
-                  ? { 
-                      ...f, 
-                      status: 'processing',
-                      progress: video.progress || 50
-                    }
-                  : f
-              )
-            );
-          }
-        } else {
-          console.error('Failed to fetch video status:', response.status, response.statusText);
-        }
-
-        // Continue polling if not completed and within max attempts
-        if (attempts < maxAttempts) {
-          setTimeout(poll, 3000); // Poll every 3 seconds
-        } else {
-          console.warn('Max polling attempts reached for video', videoId);
           setUploadedFiles(prev => 
             prev.map(f => 
-              f.id === fileId 
-                ? { ...f, status: 'error' }
+              f.videoId === videoId 
+                ? {
+                    ...f,
+                    status: data.status === 'completed' ? 'completed' : 'processing',
+                    progress: data.progress || f.progress,
+                    duration: data.duration ? formatDuration(data.duration) : f.duration,
+                    aiClipsGenerated: data.ai_suggestions?.clips?.length || 0
+                  }
                 : f
             )
           );
+
+          if (data.status === 'completed' || data.status === 'failed' || attempts >= maxAttempts) {
+            return; // Stop polling
+          }
+
+          // Continue polling
+          setTimeout(poll, 5000);
+        } else {
+          console.error('Failed to fetch video status');
+          if (attempts < maxAttempts) {
+            setTimeout(poll, 5000);
+          }
         }
       } catch (error) {
         console.error('Error polling video status:', error);
-        
-        // Continue polling if not at max attempts
         if (attempts < maxAttempts) {
-          setTimeout(poll, 5000); // Wait longer on error
-        } else {
-          setUploadedFiles(prev => 
-            prev.map(f => 
-              f.id === fileId 
-                ? { ...f, status: 'error' }
-                : f
-            )
-          );
+          setTimeout(poll, 5000);
         }
       }
     };
 
-    // Start polling immediately
     poll();
+  };
+
+  const formatDuration = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   const formatFileSize = (bytes: number) => {
@@ -322,81 +210,53 @@ export const VideoUpload: React.FC = () => {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'uploading': return 'text-blue-400';
-      case 'processing': return 'text-yellow-400';
-      case 'completed': return 'text-green-400';
-      case 'error': return 'text-red-400';
-      default: return 'text-gray-400';
+      case 'uploading': return 'text-blue-600';
+      case 'processing': return 'text-yellow-600';
+      case 'completed': return 'text-green-600';
+      case 'error': return 'text-red-600';
+      default: return 'text-gray-600';
     }
   };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'uploading': return '⬆️';
-      case 'processing': return '⚡';
+      case 'processing': return '⚙️';
       case 'completed': return '✅';
       case 'error': return '❌';
-      default: return '📁';
+      default: return '📝';
     }
   };
 
   const removeFile = (fileId: string) => {
-    setUploadedFiles(prev => prev.filter(file => file.id !== fileId));
+    setUploadedFiles(prev => prev.filter(f => f.id !== fileId));
   };
 
   const generateClips = async (fileId: string) => {
-    setIsProcessing(true);
-    setUploadedFiles(prev => 
-      prev.map(file => 
-        file.id === fileId 
-          ? { ...file, status: 'processing' }
-          : file
-      )
-    );
+    const file = uploadedFiles.find(f => f.id === fileId);
+    if (!file || !file.videoId) return;
 
     try {
-      // Get the current session token from Supabase
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
-        throw new Error('No active session found. User needs to be logged in.');
-      }
-
-      // Call backend AI analysis API
-      const response = await fetch('/api/ai/test-analysis', {
+      const response = await fetch('/api/clips/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
-        }
+          'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
+        },
+        body: JSON.stringify({
+          videoId: file.videoId,
+          settings: aiSettings
+        }),
       });
 
       if (response.ok) {
-        const result = await response.json();
-        const clipsGenerated = result.analysis?.engagementSegments?.length || Math.floor(Math.random() * aiSettings.maxClips) + 1;
-
-        setUploadedFiles(prev => 
-          prev.map(file => 
-            file.id === fileId 
-              ? { ...file, status: 'completed', aiClipsGenerated: clipsGenerated }
-              : file
-          )
-        );
+        console.log('Clip generation started');
       } else {
-        throw new Error('AI analysis failed');
+        console.error('Failed to start clip generation');
       }
     } catch (error) {
-      console.error('Clip generation failed:', error);
-      setUploadedFiles(prev => 
-        prev.map(file => 
-          file.id === fileId 
-            ? { ...file, status: 'error' }
-            : file
-        )
-      );
+      console.error('Error generating clips:', error);
     }
-    
-    setIsProcessing(false);
   };
 
   return (

@@ -201,7 +201,7 @@ export const ClipLibrary: React.FC = () => {
 
         {/* Clip Grid */}
         {!loading && !error && filteredClips.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredClips.map((clip) => (
               <div key={clip.id} className="bg-slate-700 rounded-lg p-4 hover:bg-slate-600 transition-colors">
                 <div className="aspect-video bg-gradient-to-br from-green-500 to-teal-600 rounded-lg mb-4 flex items-center justify-center relative overflow-hidden">
@@ -223,7 +223,7 @@ export const ClipLibrary: React.FC = () => {
                   <div className="absolute bottom-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
                     {clip.duration}
                   </div>
-                </div>
+              </div>
                 
                 <h3 className="text-white font-medium mb-2 truncate" title={clip.title}>
                   {clip.title}
@@ -233,7 +233,7 @@ export const ClipLibrary: React.FC = () => {
                   {clip.hook}
                 </p>
                 
-                <div className="flex items-center justify-between text-sm text-slate-400 mb-2">
+              <div className="flex items-center justify-between text-sm text-slate-400 mb-2">
                   <span className="text-slate-500">From: {clip.sourceVideo}</span>
                   <span className={`text-xs px-2 py-1 rounded ${
                     clip.status === 'ready' ? 'bg-green-500/20 text-green-400' :
@@ -242,7 +242,7 @@ export const ClipLibrary: React.FC = () => {
                   }`}>
                     {clip.status}
                   </span>
-                </div>
+              </div>
                 
                 <div className="flex items-center justify-between text-xs text-slate-500 mb-4">
                   <div className="flex items-center gap-3">
@@ -273,10 +273,10 @@ export const ClipLibrary: React.FC = () => {
                   <button className="bg-slate-600 hover:bg-slate-500 text-white p-2 rounded transition-colors">
                     <TrashIcon className="h-4 w-4" />
                   </button>
-                </div>
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
+        </div>
         )}
       </div>
     </div>

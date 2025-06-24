@@ -200,7 +200,7 @@ export const VideoLibrary: React.FC = () => {
 
         {/* Video Grid */}
         {!loading && !error && filteredVideos.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredVideos.map((video) => (
               <div key={video.id} className="bg-slate-700 rounded-lg p-4 hover:bg-slate-600 transition-colors">
                 <div className="aspect-video bg-gradient-to-br from-purple-500 to-blue-600 rounded-lg mb-4 flex items-center justify-center relative">
@@ -228,7 +228,7 @@ export const VideoLibrary: React.FC = () => {
                           style={{ width: `${video.progress}%` }}
                         ></div>
                       </div>
-                    </div>
+              </div>
                   )}
                 </div>
 
@@ -261,10 +261,10 @@ export const VideoLibrary: React.FC = () => {
                   <button className="p-2 text-slate-400 hover:text-red-400 transition-colors">
                     <TrashIcon className="h-4 w-4" />
                   </button>
-                </div>
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
+        </div>
         )}
       </div>
     </div>
