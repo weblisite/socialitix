@@ -1,0 +1,52 @@
+{
+  "name": "socialitix",
+  "version": "1.0.0",
+  "description": "AI-first SaaS platform for converting long-form videos into viral short clips",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev:netlify": "netlify dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && npm run dev",
+    "build": "npm run build:frontend && npm run build:backend",
+    "build:frontend": "cd frontend && npm run build",
+    "build:backend": "cd backend && npm run build",
+    "test": "npm run test:frontend && npm run test:backend",
+    "test:frontend": "cd frontend && npm test",
+    "test:backend": "cd backend && npm test",
+    "lint": "npm run lint:frontend && npm run lint:backend",
+    "lint:frontend": "cd frontend && npm run lint",
+    "lint:backend": "cd backend && npm run lint"
+  },
+  "devDependencies": {
+    "@types/fluent-ffmpeg": "^2.1.27",
+    "@types/jsonwebtoken": "^9.0.5",
+    "concurrently": "^8.2.2",
+    "eslint": "^8.57.0",
+    "netlify-cli": "^22.1.5",
+    "prettier": "^3.2.5"
+  },
+  "keywords": [
+    "ai",
+    "video",
+    "clips",
+    "social-media",
+    "saas",
+    "react",
+    "nodejs"
+  ],
+  "author": "Socialitix Team",
+  "license": "MIT",
+  "dependencies": {
+    "@netlify/functions": "^4.1.6",
+    "@supabase/supabase-js": "^2.50.0",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
