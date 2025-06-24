@@ -18,13 +18,13 @@ async function handler(req, res) {
     }
 
     // Validate file type
-    if (!fileType.startsWith('video/')) {
+    if (!fileType.startsWith('video/') && !fileType.startsWith('audio/') && !fileType.startsWith('image/')) {
       return res.status(400).json({ 
-        error: 'Only video files are allowed' 
+        error: 'Only video, audio, and image files are allowed' 
       });
     }
 
-    // Validate file size (500MB limit)
+    // Validate file size (500MB limit - Supabase Storage limit)
     const maxSize = 500 * 1024 * 1024; // 500MB
     if (fileSize && fileSize > maxSize) {
       return res.status(400).json({ 
@@ -32,7 +32,7 @@ async function handler(req, res) {
       });
     }
 
-    // Generate presigned upload URL
+    // Generate presigned upload URL using Supabase Storage
     const uploadData = await StorageService.generateUploadUrl(
       fileName,
       fileType,
@@ -41,13 +41,16 @@ async function handler(req, res) {
 
     res.json({
       uploadUrl: uploadData.uploadUrl,
-      key: uploadData.key,
+      filePath: uploadData.filePath,
+      token: uploadData.token,
       bucket: uploadData.bucket,
-      fields: {
-        'Content-Type': fileType,
-        'x-amz-meta-user-id': userId,
-        'x-amz-meta-upload-time': new Date().toISOString(),
-      },
+      expiresIn: 3600, // 1 hour
+      metadata: {
+        userId,
+        fileName,
+        fileType,
+        uploadTime: new Date().toISOString(),
+      }
     });
 
   } catch (error) {

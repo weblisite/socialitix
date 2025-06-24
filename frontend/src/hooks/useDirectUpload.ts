@@ -39,7 +39,7 @@ export const useDirectUpload = ({ onProgress, onComplete }: UseDirectUploadProps
         throw new Error('User not authenticated');
       }
 
-      // Step 1: Get presigned upload URL
+      // Step 1: Get presigned upload URL from backend
       const uploadUrlResponse = await fetch('/api/videos/upload-url', {
         method: 'POST',
         headers: {
@@ -58,10 +58,10 @@ export const useDirectUpload = ({ onProgress, onComplete }: UseDirectUploadProps
         throw new Error(error.error || 'Failed to get upload URL');
       }
 
-      const { uploadUrl, key } = await uploadUrlResponse.json();
+      const { uploadUrl, filePath, token } = await uploadUrlResponse.json();
 
-      // Step 2: Upload directly to S3
-      const uploadResult = await uploadToS3(file, uploadUrl, onProgress);
+      // Step 2: Upload directly to Supabase Storage
+      const uploadResult = await uploadToSupabase(file, uploadUrl, onProgress);
       
       if (!uploadResult.success) {
         throw new Error(uploadResult.error || 'Upload failed');
@@ -75,7 +75,7 @@ export const useDirectUpload = ({ onProgress, onComplete }: UseDirectUploadProps
           'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          key,
+          filePath,
           fileName: file.name,
           title: title || file.name,
         }),
@@ -109,7 +109,7 @@ export const useDirectUpload = ({ onProgress, onComplete }: UseDirectUploadProps
     }
   };
 
-  const uploadToS3 = async (
+  const uploadToSupabase = async (
     file: File, 
     uploadUrl: string, 
     onProgress?: (progress: UploadProgress) => void
@@ -131,7 +131,7 @@ export const useDirectUpload = ({ onProgress, onComplete }: UseDirectUploadProps
       };
 
       xhr.onload = () => {
-        if (xhr.status === 200) {
+        if (xhr.status >= 200 && xhr.status < 300) {
           resolve({ success: true });
         } else {
           resolve({ 
@@ -154,8 +154,82 @@ export const useDirectUpload = ({ onProgress, onComplete }: UseDirectUploadProps
     });
   };
 
+  // Alternative method using Supabase client directly (for smaller files)
+  const uploadFileDirectly = async (file: File, title?: string): Promise<UploadResult> => {
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    try {
+      // Get current session
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error('User not authenticated');
+      }
+
+      // Generate unique file path
+      const fileExtension = file.name.split('.').pop();
+      const uniqueFileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExtension}`;
+      const filePath = `uploads/${session.user.id}/${uniqueFileName}`;
+
+      // Upload directly using Supabase client
+      const { data, error } = await supabase.storage
+        .from('videos')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (error) {
+        throw new Error(`Upload failed: ${error.message}`);
+      }
+
+      setUploadProgress(100);
+
+      // Notify backend of completed upload
+      const completeResponse = await fetch('/api/videos/complete-upload', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          filePath: data.path,
+          fileName: file.name,
+          title: title || file.name,
+        }),
+      });
+
+      if (!completeResponse.ok) {
+        const error = await completeResponse.json();
+        throw new Error(error.error || 'Failed to complete upload');
+      }
+
+      const result = await completeResponse.json();
+      
+      const finalResult = {
+        success: true,
+        videoId: result.video?.id,
+      };
+
+      onComplete?.(finalResult);
+      return finalResult;
+
+    } catch (error) {
+      const errorResult = {
+        success: false,
+        error: error instanceof Error ? error.message : 'Upload failed',
+      };
+      
+      onComplete?.(errorResult);
+      return errorResult;
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   return {
     uploadFile,
+    uploadFileDirectly,
     isUploading,
     uploadProgress,
   };

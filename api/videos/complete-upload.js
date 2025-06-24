@@ -10,17 +10,20 @@ async function handler(req, res) {
   }
 
   try {
-    const { key, fileName, title } = req.body;
+    const { filePath, fileName, title } = req.body;
     const userId = req.user?.id;
 
-    if (!key || !fileName) {
+    if (!filePath || !fileName) {
       return res.status(400).json({ 
-        error: 'Missing required fields: key, fileName' 
+        error: 'Missing required fields: filePath, fileName' 
       });
     }
 
-    // Get file info from S3
-    const fileInfo = await StorageService.getFileInfo(key);
+    // Get file info from Supabase Storage
+    const fileInfo = await StorageService.getFileInfo(filePath);
+    
+    // Generate public URL for the uploaded file
+    const publicUrl = await StorageService.generateDownloadUrl(filePath);
     
     // Create video record in database
     const videoData = {
@@ -29,9 +32,9 @@ async function handler(req, res) {
       filename: fileName,
       original_filename: fileName,
       file_size: fileInfo.size,
-      s3_key: key,
-      s3_bucket: process.env.AWS_S3_BUCKET || 'socialitix-videos',
-      url: `https://${process.env.AWS_S3_BUCKET || 'socialitix-videos'}.s3.amazonaws.com/${key}`,
+      storage_path: filePath,
+      storage_bucket: 'videos',
+      url: publicUrl,
       analysis_status: 'queued',
       processing_progress: 0,
       format: fileName.split('.').pop()?.toLowerCase() || 'mp4',
@@ -50,7 +53,7 @@ async function handler(req, res) {
     // Queue video processing job
     const processingJob = await JobQueue.addJob('process_video', {
       videoId: video.id,
-      s3Key: key,
+      filePath: filePath,
       userId: userId,
       fileName: fileName,
       fileSize: fileInfo.size,
@@ -59,7 +62,7 @@ async function handler(req, res) {
     // Queue AI analysis job (lower priority)
     const aiJob = await JobQueue.addJob('ai_analysis', {
       videoId: video.id,
-      s3Key: key,
+      filePath: filePath,
       userId: userId,
     }, 'normal');
 
@@ -72,6 +75,8 @@ async function handler(req, res) {
         status: video.analysis_status,
         progress: video.processing_progress,
         file_size: video.file_size,
+        url: video.url,
+        storage_path: video.storage_path,
         created_at: video.created_at,
       },
       jobs: {
